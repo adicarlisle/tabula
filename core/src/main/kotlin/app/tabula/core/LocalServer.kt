@@ -119,7 +119,9 @@ object ServerScripts {
      * disconnects. The sudo password is read from the inherited stdin by `sudo -S -v` straight away.
      */
     fun launchDetached(): String =
-        "setsid -f bash -c 'bash ~/.tabula/install.sh > ~/.tabula/install.log 2>&1; echo \"TABULA_EXIT ${D}?\" >> ~/.tabula/install.log'"
+        "read -r TABULA_PW; printf '%s\\n' \"${D}TABULA_PW\" | " +
+            "setsid -f bash -c 'bash ~/.tabula/install.sh > ~/.tabula/install.log 2>&1; echo \"TABULA_EXIT ${D}?\" >> ~/.tabula/install.log'" +
+            "; unset TABULA_PW"
 
     fun progress(): String = "tail -n 60 ~/.tabula/install.log 2>/dev/null"
 

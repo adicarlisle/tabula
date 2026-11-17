@@ -79,7 +79,9 @@ class LocalServerTest {
     @Test
     fun `setup keeps running on the server if the phone disconnects`() {
         val launch = ServerScripts.launchDetached()
-        assertTrue(launch.startsWith("setsid -f "))
+        // The shell reads the password line itself before detaching, so a fast-closing SSH channel can't drop it.
+        assertTrue(launch.startsWith("read -r TABULA_PW; printf '%s\\n' \"${'$'}TABULA_PW\" | setsid -f "), launch)
+        assertTrue(launch.endsWith("; unset TABULA_PW"), launch)
         assertTrue("~/.tabula/install.log" in launch)
         assertTrue("TABULA_EXIT" in launch)
         assertEquals("tail -n 60 ~/.tabula/install.log 2>/dev/null", ServerScripts.progress())
