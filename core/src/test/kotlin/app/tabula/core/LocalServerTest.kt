@@ -96,7 +96,9 @@ class LocalServerTest {
 
     @Test
     fun `every script is valid bash`() {
-        val scripts = ServerKind.entries.map { ServerScripts.install(it) } + ServerCheck.SCRIPT + ServerScripts.launchDetached()
+        val scripts = ServerKind.entries.map { ServerScripts.install(it) } + ServerCheck.SCRIPT + ServerScripts.launchDetached() +
+            ServerScripts.cancelDownloads() + ServerScripts.removeModel("devstral:latest")
+        java.io.File("build/cancel-downloads.sh").writeText(ServerScripts.cancelDownloads())
         scripts.forEach { script ->
             val p = ProcessBuilder("bash", "-n").redirectErrorStream(true).start()
             p.outputStream.use { it.write(script.toByteArray()) }

@@ -104,8 +104,16 @@ class GatewayTest {
             "docker compose -f ~/.tabula/gateway/compose.yaml exec -T ollama ollama rm 'devstral:latest'",
             ServerScripts.removeModel("devstral:latest"),
         )
-        assertTrue("pkill -f 'ollama pull'" in ServerScripts.cancelDownloads())
+        // Anchored, so pkill can't match (and kill) the cleanup command itself.
+        assertTrue("pkill -f \"^ollama pull\"" in ServerScripts.cancelDownloads(), ServerScripts.cancelDownloads())
+        // Single-quoted, so nothing in it runs on the host by mistake.
+        assertTrue("exec -T ollama sh -c '" in ServerScripts.cancelDownloads())
         assertTrue("-partial" in ServerScripts.cancelDownloads())
+        // Ollama's server does the downloading and may write a little more after the pull command stops,
+        // so cleanup waits until no partial file has changed for a moment before deleting.
+        val cancel = ServerScripts.cancelDownloads()
+        assertTrue(cancel.indexOf("pkill") < cancel.indexOf("sleep"), cancel)
+        assertTrue(cancel.indexOf("sleep") < cancel.lastIndexOf("rm -f"), cancel)
         listOf("x'; rm -rf /", "a b", "", "\$(id)").forEach { assertThrows<IllegalArgumentException>(it) { ServerScripts.removeModel(it) } }
     }
 }

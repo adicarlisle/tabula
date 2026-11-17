@@ -155,7 +155,11 @@ object ServerScripts {
 
     /** Stops any model download in the container and removes its half-downloaded files. */
     fun cancelDownloads(): String =
-        "docker compose -f ~/.tabula/gateway/compose.yaml exec -T ollama sh -c \"pkill -f 'ollama pull'; rm -f /root/.ollama/models/blobs/*-partial*\""
+        "docker compose -f ~/.tabula/gateway/compose.yaml exec -T ollama sh -c '" +
+            "pkill -f \"^ollama pull\"; " +
+            "for i in 1 2 3 4 5 6 7 8 9 10; do sleep 1; " +
+            "[ -z \"$D(find /root/.ollama/models/blobs -name \"*-partial*\" -newermt \"-2 seconds\" 2>/dev/null)\" ] && break; done; " +
+            "rm -f /root/.ollama/models/blobs/*-partial*'"
 
     /** Port the model server listens on, on the server's own localhost. */
     fun port(kind: ServerKind): Int = if (kind == ServerKind.OLLAMA) 11434 else 8000
