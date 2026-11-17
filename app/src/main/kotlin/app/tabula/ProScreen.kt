@@ -741,7 +741,7 @@ private fun testVllm(s: Session, model: String): String {
 }
 
 @Composable
-private fun Field(value: String, hint: String, secret: Boolean = false, onChange: (String) -> Unit) {
+internal fun Field(value: String, hint: String, secret: Boolean = false, onChange: (String) -> Unit) {
     val look = LocalLook.current
     val context = LocalContext.current
     BasicTextField(
@@ -772,7 +772,7 @@ private fun Field(value: String, hint: String, secret: Boolean = false, onChange
 }
 
 @Composable
-private fun Button(text: String, enabled: Boolean = true, onClick: () -> Unit) {
+internal fun Button(text: String, enabled: Boolean = true, onClick: () -> Unit) {
     val look = LocalLook.current
     Box(
         Modifier.fillMaxWidth().height(52.dp)
@@ -785,7 +785,7 @@ private fun Button(text: String, enabled: Boolean = true, onClick: () -> Unit) {
 }
 
 @Composable
-private fun <E : Enum<E>> Pick(options: List<E>, selected: E, onPick: (E) -> Unit) {
+internal fun <E : Enum<E>> Pick(options: List<E>, selected: E, onPick: (E) -> Unit) {
     val look = LocalLook.current
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         options.forEach { o ->
@@ -802,12 +802,12 @@ private fun <E : Enum<E>> Pick(options: List<E>, selected: E, onPick: (E) -> Uni
 }
 
 @Composable
-private fun Note(text: String) {
+internal fun Note(text: String) {
     BasicText(text, Modifier.padding(vertical = 8.dp), style = TextStyle(fontFamily = Mono, fontSize = 12.sp, lineHeight = 18.sp, color = LocalLook.current.muted))
 }
 
 @Composable
-private fun Code(text: String) {
+internal fun Code(text: String) {
     val look = LocalLook.current
     Column(Modifier.fillMaxWidth().heightIn(max = 360.dp).border(1.dp, look.faint, RoundedCornerShape(4.dp)).padding(12.dp)) {
         SelectionContainer {
@@ -817,7 +817,7 @@ private fun Code(text: String) {
 }
 
 /** Current clipboard text, read only when the user taps PASTE. */
-private fun clipboardText(context: Context): String? {
+internal fun clipboardText(context: Context): String? {
     val cm = context.getSystemService(android.content.ClipboardManager::class.java)
     return cm.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(context)?.toString()
 }

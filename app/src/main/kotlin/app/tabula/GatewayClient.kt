@@ -34,6 +34,17 @@ class GatewayClient(private val host: String, private val key: String, private v
         if (c.responseCode !in 200..299) throw IllegalStateException("Gateway replied ${c.responseCode}")
     }
 
+    /** Raw POST through the pinned connection (used for the OpenAI-style chat endpoint). */
+    fun post(path: String, headers: Map<String, String>, body: String): Pair<Int, String> {
+        val c = open(path)
+        c.requestMethod = "POST"; c.doOutput = true
+        headers.forEach { (k, v) -> c.setRequestProperty(k, v) }
+        c.outputStream.use { it.write(body.toByteArray()) }
+        val code = c.responseCode
+        val text = (if (code in 200..299) c.inputStream else c.errorStream)?.bufferedReader()?.readText().orEmpty()
+        return code to text
+    }
+
     /** Model names on the server. */
     fun models(): List<String> {
         val c = open("/api/tags")

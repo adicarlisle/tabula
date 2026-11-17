@@ -82,7 +82,15 @@ import app.tabula.core.SettingKind
 import app.tabula.core.Theme
 import app.tabula.core.WordFont
 import app.tabula.core.WordSize
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.selection.SelectionContainer
 import java.text.DecimalFormat
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
@@ -148,7 +156,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-internal enum class Mode { INTRO, HOME, DRAWER, SETTINGS, PRO }
+internal enum class Mode { INTRO, HOME, DRAWER, SETTINGS, PRO, AI }
 
 @Composable
 private fun Launcher(style: LauncherStyle, onStyle: (LauncherStyle) -> Unit) {
@@ -161,10 +169,12 @@ private fun Launcher(style: LauncherStyle, onStyle: (LauncherStyle) -> Unit) {
     val introPrefs = remember { context.getSharedPreferences("intro", Context.MODE_PRIVATE) }
     var mode by remember { mutableStateOf(if (introPrefs.getBoolean("done", false)) Mode.HOME else Mode.INTRO) }
     var answer by remember { mutableStateOf<String?>(null) }
+    var aiLine by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
 
     BackHandler(enabled = query.isNotEmpty() || (mode != Mode.HOME && mode != Mode.INTRO) || answer != null) {
         query = ""; answer = null
-        mode = if (mode == Mode.PRO) Mode.SETTINGS else Mode.HOME
+        mode = if (mode == Mode.PRO || mode == Mode.AI) Mode.SETTINGS else Mode.HOME
     }
 
     Column(
@@ -172,7 +182,8 @@ private fun Launcher(style: LauncherStyle, onStyle: (LauncherStyle) -> Unit) {
     ) {
         when (mode) {
             Mode.INTRO -> { Intro { introPrefs.edit { putBoolean("done", true) }; mode = Mode.HOME }; return@Column }
-            Mode.SETTINGS -> { SettingsScreen(style, onStyle, onPro = { mode = Mode.PRO }, onIntro = { mode = Mode.INTRO }, onClose = { mode = Mode.HOME }); return@Column }
+            Mode.SETTINGS -> { SettingsScreen(style, onStyle, onPro = { mode = Mode.PRO }, onAi = { mode = Mode.AI }, onIntro = { mode = Mode.INTRO }, onClose = { mode = Mode.HOME }); return@Column }
+            Mode.AI -> { AiScreen(onClose = { mode = Mode.SETTINGS }); return@Column }
             Mode.PRO -> { ProScreen(onClose = { mode = Mode.SETTINGS }); return@Column }
             else -> Unit
         }
@@ -199,7 +210,12 @@ private fun Launcher(style: LauncherStyle, onStyle: (LauncherStyle) -> Unit) {
             }
         }
 
-        answer?.let { Label(it, Modifier.padding(vertical = 8.dp), color = look.text) }
+        answer?.let {
+            Column(Modifier.fillMaxWidth().heightIn(max = 260.dp).verticalScroll(rememberScrollState()).padding(vertical = 8.dp)) {
+                SelectionContainer { BasicText(it, style = TextStyle(fontFamily = Mono, fontSize = 15.sp, lineHeight = 22.sp, color = look.text)) }
+                aiLine?.let { line -> Label(line, Modifier.padding(top = 8.dp)) }
+            }
+        }
 
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             TapLabel(if (mode == Mode.DRAWER) "← HOME" else "ALL") {
@@ -208,16 +224,28 @@ private fun Launcher(style: LauncherStyle, onStyle: (LauncherStyle) -> Unit) {
             TapLabel("SETTINGS") { mode = Mode.SETTINGS; query = "" }
         }
 
-        SearchBar(query, onChange = { query = it; answer = null }) {
-            answer = runLocal(context, query)
-            if (answer == null) query = ""
+        SearchBar(query, onChange = { query = it; answer = null; aiLine = null }) {
+            val cmd = LocalCommandParser.parse(query)
+            if (cmd is LocalCommand.AskAi && cmd.text.isNotBlank()) {
+                // Not something the phone can do: ask the user's AI (their own keys), or stay phone-only.
+                answer = "…"; aiLine = "THINKING"
+                scope.launch {
+                    val reply = withContext(Dispatchers.IO) { runCatching { AiClient(context).ask(cmd.text) }.getOrNull() }
+                    answer = reply?.text ?: AiPause.LINE
+                    aiLine = reply?.let { "${it.by} · ${it.cost}" }
+                }
+            } else {
+                aiLine = null
+                answer = runLocal(context, query)
+                if (answer == null) query = ""
+            }
         }
         Spacer(Modifier.height(16.dp))
     }
 }
 
 @Composable
-private fun SettingsScreen(style: LauncherStyle, onStyle: (LauncherStyle) -> Unit, onPro: () -> Unit, onIntro: () -> Unit, onClose: () -> Unit) {
+private fun SettingsScreen(style: LauncherStyle, onStyle: (LauncherStyle) -> Unit, onPro: () -> Unit, onAi: () -> Unit, onIntro: () -> Unit, onClose: () -> Unit) {
     val look = LocalLook.current
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("pro", Context.MODE_PRIVATE) }
@@ -244,6 +272,7 @@ private fun SettingsScreen(style: LauncherStyle, onStyle: (LauncherStyle) -> Uni
                 }
             }
         }
+        item { Spacer(Modifier.height(8.dp)); TapLabel("AI & KEYS →", color = look.text, onTap = onAi) }
         item { Choice("THEME", Theme.entries, style.theme) { onStyle(style.copy(theme = it)) } }
         item { Choice("WORD FONT", WordFont.entries, style.font) { onStyle(style.copy(font = it)) } }
         item { Choice("WORD SIZE", WordSize.entries, style.size) { onStyle(style.copy(size = it)) } }
