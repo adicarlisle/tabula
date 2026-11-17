@@ -73,4 +73,20 @@ class LocalServerTest {
         assertEquals(HostKeyDecision.CHANGED_REFUSE, hosts.check("box:22", "SHA256:bbb"))
         assertEquals(KnownHosts.decode(hosts.encode()).check("box:22", "SHA256:aaa"), HostKeyDecision.TRUSTED)
     }
+
+    @Test
+    fun `setup keeps running on the server if the phone disconnects`() {
+        val launch = ServerScripts.launchDetached()
+        assertTrue(launch.startsWith("setsid -f "))
+        assertTrue("~/.tabula/install.log" in launch)
+        assertTrue("TABULA_EXIT" in launch)
+        assertEquals("tail -n 60 ~/.tabula/install.log 2>/dev/null", ServerScripts.progress())
+    }
+
+    @Test
+    fun `progress log says when setup is finished`() {
+        assertEquals(SetupState.RUNNING, SetupState.of("downloading...\n>>> Installing ollama"))
+        assertEquals(SetupState.DONE, SetupState.of("...\nTABULA_OK\nTABULA_EXIT 0"))
+        assertEquals(SetupState.FAILED, SetupState.of("curl: (6) Could not resolve host\nTABULA_EXIT 6"))
+    }
 }

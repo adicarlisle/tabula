@@ -26,6 +26,8 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -36,6 +38,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -53,8 +56,10 @@ import app.tabula.core.TargetPolicy
 import app.tabula.core.ServerAddress
 import app.tabula.core.ServerKind
 import app.tabula.core.ServerScripts
+import app.tabula.core.SetupState
 import com.jcraft.jsch.Session
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -87,7 +92,7 @@ internal fun ProScreen(onClose: () -> Unit) {
     var permission by remember { mutableStateOf(false) }
     var password by remember { mutableStateOf("") }
     var kind by remember { mutableStateOf(runCatching { ServerKind.valueOf(prefs.getString("kind", "OLLAMA")!!) }.getOrDefault(ServerKind.OLLAMA)) }
-    var step by remember { mutableStateOf(if (prefs.getBoolean("ready", false)) Step.MODELS else Step.SERVER) }
+    var step by remember { mutableStateOf(if (prefs.getBoolean("installing", false)) Step.RUNNING else if (prefs.getBoolean("ready", false)) Step.MODELS else Step.SERVER) }
     var fingerprint by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
@@ -160,31 +165,57 @@ internal fun ProScreen(onClose: () -> Unit) {
         }
     }
 
-    /** Upload the shown script, run it with the sudo password on stdin, then forget the password. */
-    fun runScript() = work {
-        val s = session ?: throw IllegalStateException("Not connected")
-        step = Step.RUNNING; log.clear()
-        val ssh = Ssh(known)
-        val script = ServerScripts.install(kind)
-        val ok = withContext(Dispatchers.IO) {
-            ssh.run(s, "mkdir -p ~/.tabula && chmod 700 ~/.tabula && cat > ~/.tabula/install.sh", script.toByteArray())
-            var ok = false
-            ssh.run(s, "bash ~/.tabula/install.sh", (password + "\n").toByteArray()) { line ->
-                if (line.contains("TABULA_OK")) ok = true
-                scope.launch { log.add(line); if (log.size > 200) log.removeAt(0) }
-            }
-            ok
-        }
-        password = ""
-        s.disconnect(); session = null
-        if (ok) { prefs.edit { putBoolean("ready", true) }; step = Step.MODELS } else message = "Setup didn't finish. Read the log above."
-    }
-
     suspend fun keySession(): Session {
         val addr = address() ?: throw IllegalStateException("No server saved")
         val key = secrets.get("ssh-key") ?: throw IllegalStateException("No phone key saved. Set the server up again.")
         return withContext(Dispatchers.IO) { Ssh(known).connect(addr, privateKey = key) }
     }
+
+    /** Follows the setup log on the server, reconnecting with the phone's key if the connection drops. */
+    suspend fun follow() {
+        var ks: Session? = null
+        try {
+            while (true) {
+                val text = try {
+                    if (ks?.isConnected != true) ks = keySession()
+                    withContext(Dispatchers.IO) { StringBuilder().also { Ssh.readText(ks!!, ServerScripts.progress(), it) }.toString() }
+                } catch (_: Exception) { ks = null; null }
+                if (text != null) {
+                    log.clear(); log.addAll(text.lines().filter { it.isNotBlank() })
+                    when (SetupState.of(text)) {
+                        SetupState.DONE -> { prefs.edit { putBoolean("ready", true); putBoolean("installing", false) }; step = Step.MODELS; return }
+                        SetupState.FAILED -> { prefs.edit { putBoolean("installing", false) }; message = "Setup failed. Read the log above."; return }
+                        SetupState.RUNNING -> Unit
+                    }
+                }
+                delay(3_000)
+            }
+        } finally { ks?.disconnect() }
+    }
+
+    /** Upload the shown script and start it on the server (it keeps going if the phone disconnects). */
+    fun runScript() = work {
+        val s = session ?: throw IllegalStateException("Not connected")
+        step = Step.RUNNING; log.clear()
+        val ssh = Ssh(known)
+        val script = ServerScripts.install(kind)
+        withContext(Dispatchers.IO) {
+            ssh.run(s, "mkdir -p ~/.tabula && chmod 700 ~/.tabula && rm -f ~/.tabula/install.log && cat > ~/.tabula/install.sh", script.toByteArray())
+            ssh.run(s, ServerScripts.launchDetached(), (password + "\n").toByteArray())
+        }
+        password = ""
+        s.disconnect(); session = null
+        prefs.edit { putBoolean("installing", true) }
+        follow()
+    }
+
+    // Keep the screen on while setup runs; reopening Pro picks up an install that is still going.
+    val view = LocalView.current
+    DisposableEffect(step) {
+        view.keepScreenOn = step == Step.RUNNING
+        onDispose { view.keepScreenOn = false }
+    }
+    LaunchedEffect(Unit) { if (step == Step.RUNNING && !busy) work { follow() } }
 
     LazyColumn(Modifier.fillMaxSize()) {
         item {
@@ -262,7 +293,7 @@ internal fun ProScreen(onClose: () -> Unit) {
             }
 
             Step.RUNNING -> item {
-                Section(if (busy) "SETTING UP… THIS CAN TAKE A FEW MINUTES" else "SETUP LOG")
+                Section(if (busy) "SETTING UP ON THE SERVER… IT KEEPS GOING EVEN IF YOU LEAVE" else "SETUP LOG")
                 Code(log.joinToString("\n").ifEmpty { "…" })
                 if (!busy) TapLabel("BACK") { step = Step.SERVER }
             }

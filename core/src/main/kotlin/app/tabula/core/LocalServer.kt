@@ -84,6 +84,15 @@ object ServerScripts {
             "~/.tabula/venv/bin/hf download '${model.value}' --include '*.safetensors' '*.json' 'tokenizer*' && ~/.tabula/serve.sh '${model.value}'"
     }
 
+    /**
+     * Starts the uploaded setup in its own session on the server, so it finishes even if the phone
+     * disconnects. The sudo password is read from the inherited stdin by `sudo -S -v` straight away.
+     */
+    fun launchDetached(): String =
+        "setsid -f bash -c 'bash ~/.tabula/install.sh > ~/.tabula/install.log 2>&1; echo \"TABULA_EXIT ${D}?\" >> ~/.tabula/install.log'"
+
+    fun progress(): String = "tail -n 60 ~/.tabula/install.log 2>/dev/null"
+
     /** Port the model server listens on, on the server's own localhost. */
     fun port(kind: ServerKind): Int = if (kind == ServerKind.OLLAMA) 11434 else 8000
 }
@@ -108,5 +117,17 @@ class KnownHosts(private val keys: MutableMap<String, String> = mutableMapOf()) 
         fun decode(text: String) = KnownHosts(
             text.lines().mapNotNull { line -> line.split(' ').takeIf { it.size == 2 }?.let { it[0] to it[1] } }.toMap().toMutableMap(),
         )
+    }
+}
+
+enum class SetupState {
+    RUNNING, DONE, FAILED;
+
+    companion object {
+        fun of(log: String): SetupState = when {
+            "TABULA_OK" in log && "TABULA_EXIT 0" in log -> DONE
+            Regex("""TABULA_EXIT \d+""").containsMatchIn(log) -> FAILED
+            else -> RUNNING
+        }
     }
 }
