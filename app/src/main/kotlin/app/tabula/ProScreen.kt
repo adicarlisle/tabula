@@ -3,6 +3,8 @@ package app.tabula
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
@@ -60,6 +62,8 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 
+private const val LOCAL_NETWORK = "android.permission.ACCESS_LOCAL_NETWORK"
+
 private enum class Step { SERVER, TRUST, SCRIPT, RUNNING, MODELS }
 
 /**
@@ -89,6 +93,18 @@ internal fun ProScreen(onClose: () -> Unit) {
     var message by remember { mutableStateOf<String?>(null) }
     val log = remember { mutableStateListOf<String>() }
     var session by remember { mutableStateOf<Session?>(null) }
+    var pendingLan by remember { mutableStateOf<(() -> Unit)?>(null) }
+    val askLan = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) pendingLan?.invoke()
+        else message = "Tabula needs the Nearby devices permission to reach your computer on this network. You can turn it on in Settings > Apps > Tabula > Permissions."
+        pendingLan = null
+    }
+    /** Android 17+ asks the user before an app can reach devices on the home network. */
+    fun withLan(action: () -> Unit) {
+        val needed = android.os.Build.VERSION.SDK_INT >= 37 &&
+            context.checkSelfPermission(LOCAL_NETWORK) != android.content.pm.PackageManager.PERMISSION_GRANTED
+        if (needed) { pendingLan = action; askLan.launch(LOCAL_NETWORK) } else action()
+    }
 
     var hfToken by remember { mutableStateOf(secrets.get("hf-token")?.decodeToString() ?: "") }
     var query by remember { mutableStateOf("") }
@@ -182,11 +198,11 @@ internal fun ProScreen(onClose: () -> Unit) {
             Step.SERVER -> item {
                 Section("SERVER")
                 Button(if (busy) "LOOKING…" else "FIND SERVERS ON THIS WIFI", enabled = !busy) {
-                    work {
+                    withLan { work {
                         val list = LanFinder.find(context)
                         found.clear(); found.addAll(list)
                         if (list.isEmpty()) message = "No SSH servers found. Is SSH on? (sudo apt install openssh-server)"
-                    }
+                    } }
                 }
                 found.forEach { f ->
                     val on = f.host == host
@@ -221,7 +237,7 @@ internal fun ProScreen(onClose: () -> Unit) {
                 Pick(ServerKind.entries, kind) { kind = it }
                 Note(if (kind == ServerKind.OLLAMA) "Ollama: easiest, runs GGUF models." else "vLLM: faster on an NVIDIA GPU, runs safetensors models.")
                 Spacer(Modifier.height(16.dp))
-                Button(if (busy) "CONNECTING…" else "CONNECT", enabled = !busy && permission && password.isNotEmpty() && host.isNotBlank() && user.isNotBlank()) { firstConnect() }
+                Button(if (busy) "CONNECTING…" else "CONNECT", enabled = !busy && permission && password.isNotEmpty() && host.isNotBlank() && user.isNotBlank()) { withLan { firstConnect() } }
             }
 
             Step.TRUST -> item {
@@ -276,7 +292,7 @@ internal fun ProScreen(onClose: () -> Unit) {
                             is HfDecision.Allowed -> {
                                 Note("Licence: ${decision.licence}. By installing you agree to the model's licence.")
                                 Button(if (busy) "INSTALLING…" else "INSTALL ON SERVER", enabled = !busy) {
-                                    work {
+                                    withLan { work {
                                         log.clear()
                                         val s = keySession()
                                         val cmd = ServerScripts.installModel(kind, id)
@@ -291,7 +307,7 @@ internal fun ProScreen(onClose: () -> Unit) {
                                             installed = id.value; prefs.edit { putString("model", id.value) }
                                             message = if (kind == ServerKind.VLLM) "Installed. vLLM takes a minute or two to load it." else "Installed."
                                         } else message = "Install failed (exit $code). See the log."
-                                    }
+                                    } }
                                 }
                             }
                             is HfDecision.AcceptTermsOnHuggingFace -> {
@@ -330,12 +346,12 @@ internal fun ProScreen(onClose: () -> Unit) {
                     installed?.let { model ->
                         Section("TRY IT")
                         Button(if (busy) "ASKING…" else "ASK THE MODEL A TEST QUESTION", enabled = !busy) {
-                            work {
+                            withLan { work {
                                 val s = keySession()
                                 val reply = withContext(Dispatchers.IO) { testModel(s, kind, model) }
                                 s.disconnect()
                                 message = "Model says: $reply"
-                            }
+                            } }
                         }
                     }
                     Spacer(Modifier.height(24.dp))

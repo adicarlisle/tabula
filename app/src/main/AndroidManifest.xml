@@ -7,6 +7,8 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- To check the phone is on wifi before looking for servers on it. -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Android 17+: needed to reach the user's own server on their home network (asked when they tap Find or Connect). -->
+    <uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK" />
 
     <!-- Lets the launcher see launchable apps without QUERY_ALL_PACKAGES (a restricted Play permission). -->
     <queries>
