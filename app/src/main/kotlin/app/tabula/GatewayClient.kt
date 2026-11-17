@@ -14,7 +14,7 @@ import javax.net.ssl.TrustManagerFactory
 import org.json.JSONObject
 
 /** Talks to the user's Ollama gateway over HTTPS, trusting only the gateway's own pinned certificate authority. */
-class GatewayClient(private val host: String, private val key: String, private val ca: X509Certificate) {
+class GatewayClient(private val host: String, private val key: String, private val ca: X509Certificate, private val network: android.net.Network? = null) {
     private val ssl: SSLContext = SSLContext.getInstance("TLS").apply {
         val store = KeyStore.getInstance(KeyStore.getDefaultType()).apply { load(null); setCertificateEntry("tabula-gateway", ca) }
         val tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm()).apply { init(store) }
@@ -22,7 +22,8 @@ class GatewayClient(private val host: String, private val key: String, private v
     }
 
     private fun open(path: String): HttpsURLConnection =
-        (URL("https://$host:${Gateway.PORT}$path").openConnection() as HttpsURLConnection).apply {
+        // Over the home wifi itself when known, so a VPN on the phone can't swallow local traffic.
+        (URL("https://$host:${Gateway.PORT}$path").let { network?.openConnection(it) ?: it.openConnection() } as HttpsURLConnection).apply {
             sslSocketFactory = ssl.socketFactory
             connectTimeout = 10_000; readTimeout = 180_000
             setRequestProperty("Authorization", "Bearer $key")
@@ -57,10 +58,10 @@ class GatewayClient(private val host: String, private val key: String, private v
         fun sha256(cert: X509Certificate): String = MessageDigest.getInstance("SHA-256").digest(cert.encoded).joinToString("") { "%02x".format(it) }
 
         /** For a device that scanned a QR code: trust exactly the certificate the QR code carried. */
-        fun fromPairing(p: Pairing): GatewayClient {
+        fun fromPairing(p: Pairing, network: android.net.Network? = null): GatewayClient {
             val der = java.util.Base64.getUrlDecoder().decode(p.caBase64)
             val ca = CertificateFactory.getInstance("X.509").generateCertificate(ByteArrayInputStream(der)) as X509Certificate
-            return GatewayClient(p.host, p.key, ca)
+            return GatewayClient(p.host, p.key, ca, network)
         }
 
         fun caBase64(ca: X509Certificate): String = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(ca.encoded)

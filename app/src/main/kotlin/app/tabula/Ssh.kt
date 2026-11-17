@@ -18,7 +18,7 @@ class UnknownHostKey(val fingerprint: String) : Exception("Unknown host key $fin
 class ChangedHostKey(val fingerprint: String) : Exception("Server key changed: $fingerprint. Refusing to connect.")
 
 /** SSH to the user's own server. Host keys are checked against [known] (trust on first use). */
-class Ssh(private val known: KnownHosts) {
+class Ssh(private val known: KnownHosts, private val lanSocket: com.jcraft.jsch.SocketFactory? = null) {
     private val jsch = JSch()
 
     private inner class Repo(private val addr: ServerAddress) : HostKeyRepository {
@@ -47,6 +47,7 @@ class Ssh(private val known: KnownHosts) {
         jsch.removeAllIdentity()
         if (privateKey != null) jsch.addIdentity("tabula", privateKey, null, null)
         val session = jsch.getSession(addr.user, addr.host, addr.port)
+        lanSocket?.let { session.setSocketFactory(it) }
         if (password != null) session.setPassword(String(password))
         session.setConfig("StrictHostKeyChecking", "yes")
         session.setConfig("PreferredAuthentications", if (privateKey != null) "publickey" else "password,keyboard-interactive")
@@ -91,6 +92,14 @@ class Ssh(private val known: KnownHosts) {
     }
 
     companion object {
+        /** SSH sockets that go straight out on the home wifi, even when a VPN is on. */
+        fun lanSockets(network: android.net.Network): com.jcraft.jsch.SocketFactory = object : com.jcraft.jsch.SocketFactory {
+            override fun createSocket(host: String, port: Int): java.net.Socket =
+                network.socketFactory.createSocket().apply { connect(java.net.InetSocketAddress(host, port), 15_000) }
+            override fun getInputStream(socket: java.net.Socket): java.io.InputStream = socket.getInputStream()
+            override fun getOutputStream(socket: java.net.Socket): java.io.OutputStream = socket.getOutputStream()
+        }
+
         fun hostId(addr: ServerAddress) = "${addr.host}:${addr.port}"
 
         /** Runs a short command on an open session and appends its output to [into]. */

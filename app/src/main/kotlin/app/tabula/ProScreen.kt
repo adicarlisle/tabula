@@ -178,7 +178,7 @@ internal fun ProScreen(onClose: () -> Unit) {
     suspend fun keySession(): Session {
         val addr = ServerAddress.parse(addressText) ?: throw IllegalStateException("No server saved")
         val key = secrets.get("ssh-key") ?: throw IllegalStateException("No phone key saved. Set the server up again.")
-        return withContext(Dispatchers.IO) { Ssh(known).connect(addr, privateKey = key) }
+        return withContext(Dispatchers.IO) { Ssh(known, lan(context)).connect(addr, privateKey = key) }
     }
 
     suspend fun <T> withKeySession(block: (Session) -> T): T {
@@ -190,7 +190,7 @@ internal fun ProScreen(onClose: () -> Unit) {
         val gwHost = prefs.getString("gw_host", null) ?: throw IllegalStateException("Gateway not ready yet")
         val ca = prefs.getString("gw_ca", null) ?: throw IllegalStateException("Gateway certificate missing")
         val key = secrets.get("gw-key")?.decodeToString() ?: throw IllegalStateException("No key for this device")
-        return GatewayClient.fromPairing(Pairing(gwHost, Gateway.PORT, key, ca))
+        return GatewayClient.fromPairing(Pairing(gwHost, Gateway.PORT, key, ca), HomeNetwork.get(context))
     }
 
     /** After setup: read the gateway's address and its CA certificate over SSH (a channel we already trust). */
@@ -213,7 +213,7 @@ internal fun ProScreen(onClose: () -> Unit) {
     /** Writes the device keys to the server and reloads the gateway. Keys go over SSH stdin, never on a command line. */
     suspend fun pushKeys(list: List<DeviceKey>) {
         withKeySession { s ->
-            val ssh = Ssh(known)
+            val ssh = Ssh(known, lan(context))
             ssh.run(s, "umask 077 && cat > ~/.tabula/gateway/keys", DeviceKey.encodeAll(list).toByteArray())
             ssh.run(s, "umask 077 && cat > ~/.tabula/gateway/Caddyfile", Gateway.caddyfile(list).toByteArray())
             ssh.run(s, "docker compose -f $COMPOSE exec -T gateway caddy reload --config /etc/caddy/Caddyfile")
@@ -235,7 +235,7 @@ internal fun ProScreen(onClose: () -> Unit) {
         }
         addressText = "${target.user}@${target.host}:${target.port}"
         prefs.edit { putString("address", addressText); putString("kind", kind.name) }
-        val ssh = Ssh(known)
+        val ssh = Ssh(known, lan(context))
         try {
             val s = withContext(Dispatchers.IO) {
                 try {
@@ -298,7 +298,7 @@ internal fun ProScreen(onClose: () -> Unit) {
         val s = session ?: throw IllegalStateException("Not connected")
         step = Step.RUNNING; log.clear()
         prefs.edit { putLong("install_started", System.currentTimeMillis()) }
-        val ssh = Ssh(known)
+        val ssh = Ssh(known, lan(context))
         withContext(Dispatchers.IO) {
             ssh.run(s, "mkdir -p ~/.tabula/gateway && chmod 700 ~/.tabula ~/.tabula/gateway && rm -f ~/.tabula/install.log")
             if (kind == ServerKind.OLLAMA) {
@@ -324,7 +324,7 @@ internal fun ProScreen(onClose: () -> Unit) {
     fun join() = work {
         val text = scanQr(context) ?: return@work
         val p = Pairing.decode(text) ?: throw IllegalArgumentException("That QR code isn't a Tabula local AI code.")
-        val client = GatewayClient.fromPairing(p)
+        val client = GatewayClient.fromPairing(p, HomeNetwork.get(context))
         val names = withContext(Dispatchers.IO) { client.models() }
         secrets.put("gw-key", p.key.toByteArray())
         prefs.edit { putString("gw_host", p.host); putString("gw_ca", p.caBase64); putBoolean("joined", true); putString("kind", ServerKind.OLLAMA.name) }
@@ -365,9 +365,11 @@ internal fun ProScreen(onClose: () -> Unit) {
                 Button(if (busy) "LOOKING…" else "FIND SERVERS ON THIS WIFI", enabled = !busy) {
                     withLan {
                         work {
-                            val list = LanFinder.find(context)
-                            found.clear(); found.addAll(list)
-                            if (list.isEmpty()) message = "No SSH servers found. Is SSH on? (sudo apt install openssh-server)"
+                            val result = LanFinder.find(context)
+                            found.clear(); found.addAll(result.servers)
+                            message = if (result.servers.isEmpty()) {
+                                "No SSH servers found. Searched ${result.searched}. Is SSH on? (sudo apt install openssh-server)"
+                            } else "Searched ${result.searched}."
                         }
                     }
                 }
@@ -545,8 +547,8 @@ internal fun ProScreen(onClose: () -> Unit) {
                                             val token = hfToken.trim()
                                             val code = withKeySession { s ->
                                                 // The token goes over stdin, never on the command line.
-                                                if (token.isNotEmpty()) Ssh(known).run(s, "read -r HF_TOKEN; export HF_TOKEN; $cmd", (token + "\n").toByteArray()) { scope.launch { log.add(it) } }
-                                                else Ssh(known).run(s, cmd) { scope.launch { log.add(it) } }
+                                                if (token.isNotEmpty()) Ssh(known, lan(context)).run(s, "read -r HF_TOKEN; export HF_TOKEN; $cmd", (token + "\n").toByteArray()) { scope.launch { log.add(it) } }
+                                                else Ssh(known, lan(context)).run(s, cmd) { scope.launch { log.add(it) } }
                                             }
                                             if (code == 0) {
                                                 model = if (kind == ServerKind.OLLAMA) "hf.co/${id.value}" else id.value
@@ -789,3 +791,6 @@ private fun recordFailure(prefs: SharedPreferences, host: String) {
 }
 
 private fun clearFailures(prefs: SharedPreferences, host: String) = prefs.edit { remove("fail:$host") }
+
+/** Route SSH over the home wifi itself (bypassing any VPN), when there is one. */
+private fun lan(context: Context): com.jcraft.jsch.SocketFactory? = HomeNetwork.get(context)?.let { Ssh.lanSockets(it) }
