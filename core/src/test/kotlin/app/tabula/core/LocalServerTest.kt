@@ -10,11 +10,13 @@ import org.junit.jupiter.api.assertThrows
 /** Examples for the Pro "local AI server": what runs on the user's Linux machine, and the safety checks around it. */
 class LocalServerTest {
     @Test
-    fun `ollama install uses the official installer and stays on localhost`() {
+    fun `ollama is installed in docker behind the key gateway, and the old open service is switched off`() {
         val script = ServerScripts.install(ServerKind.OLLAMA)
-        assertTrue("https://ollama.com/install.sh" in script)
-        assertTrue("OLLAMA_HOST=127.0.0.1:11434" in script)
+        assertTrue("docker compose up -d" in script)
+        assertTrue("systemctl disable --now ollama" in script)
+        assertTrue("usermod -aG docker" in script)
         assertFalse("0.0.0.0" in script)
+        assertFalse("tk_" in script, "device keys are uploaded separately, never shown in the script")
     }
 
     @Test
@@ -38,7 +40,7 @@ class LocalServerTest {
     @Test
     fun `model install commands per server`() {
         assertEquals(
-            "ollama pull 'hf.co/bartowski/Llama-3.2-3B-Instruct-GGUF'",
+            "docker compose -f ~/.tabula/gateway/compose.yaml exec -T ollama ollama pull 'hf.co/bartowski/Llama-3.2-3B-Instruct-GGUF'",
             ServerScripts.installModel(ServerKind.OLLAMA, HfModelId.parse("bartowski/Llama-3.2-3B-Instruct-GGUF")),
         )
         assertEquals(
@@ -88,5 +90,16 @@ class LocalServerTest {
         assertEquals(SetupState.RUNNING, SetupState.of("downloading...\n>>> Installing ollama"))
         assertEquals(SetupState.DONE, SetupState.of("...\nTABULA_OK\nTABULA_EXIT 0"))
         assertEquals(SetupState.FAILED, SetupState.of("curl: (6) Could not resolve host\nTABULA_EXIT 6"))
+    }
+
+    @Test
+    fun `every script is valid bash`() {
+        val scripts = ServerKind.entries.map { ServerScripts.install(it) } + ServerCheck.SCRIPT + ServerScripts.launchDetached()
+        scripts.forEach { script ->
+            val p = ProcessBuilder("bash", "-n").redirectErrorStream(true).start()
+            p.outputStream.use { it.write(script.toByteArray()) }
+            val out = p.inputStream.bufferedReader().readText()
+            assertEquals(0, p.waitFor(), out + "\n" + script)
+        }
     }
 }

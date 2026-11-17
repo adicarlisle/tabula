@@ -50,4 +50,7 @@ dependencies {
     implementation(libs.activity.compose)
     implementation(libs.core.ktx)
     implementation(libs.jsch)
+    implementation(libs.zxing.core)
+    // Google's code scanner: scans QR codes without Tabula needing camera permission.
+    implementation(libs.code.scanner)
 }

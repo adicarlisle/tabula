@@ -40,20 +40,7 @@ object ServerScripts {
     private const val D = "$"
 
     fun install(kind: ServerKind): String = when (kind) {
-        ServerKind.OLLAMA -> """
-            set -euo pipefail
-            sudo -S -p '' -v
-            sudo -n sh -c 'printf "Managed by the Tabula app: %s set up by user %s on %s\n" "$1" "$2" "$(date -Is)" >> /etc/tabula-managed' _ Ollama "${D}USER"
-            logger -t tabula "Tabula phone app set up Ollama for user ${D}USER"
-            curl -fsSL https://ollama.com/install.sh -o /tmp/ollama-install.sh
-            sudo -n sh /tmp/ollama-install.sh
-            sudo -n mkdir -p /etc/systemd/system/ollama.service.d
-            printf '[Service]\nEnvironment="OLLAMA_HOST=127.0.0.1:11434"\n' | sudo -n tee /etc/systemd/system/ollama.service.d/tabula.conf >/dev/null
-            sudo -n systemctl daemon-reload
-            sudo -n systemctl enable --now ollama
-            sudo -n systemctl restart ollama
-            echo TABULA_OK
-        """.trimIndent()
+        ServerKind.OLLAMA -> ollamaInDocker()
 
         ServerKind.VLLM -> """
             set -euo pipefail
@@ -78,8 +65,51 @@ object ServerScripts {
         """.trimIndent()
     }
 
+    /**
+     * Ollama in Docker with no open port, behind the HTTPS key gateway. The Caddyfile with the device keys
+     * is uploaded separately by the phone (chmod 600), so keys never appear in this script.
+     */
+    private fun ollamaInDocker(): String = """
+        set -euo pipefail
+        sudo -S -p '' -v
+        # Keep sudo's permission fresh during long downloads.
+        ( while true; do sudo -n -v 2>/dev/null; sleep 60; done ) & KEEP=$D!
+        trap 'kill ${D}KEEP 2>/dev/null || true' EXIT
+        sudo -n sh -c 'printf "Managed by the Tabula app: %s set up by user %s on %s\n" "${D}1" "${D}2" "${D}(date -Is)" >> /etc/tabula-managed' _ "Ollama in Docker" "${D}USER"
+        logger -t tabula "Tabula phone app set up Ollama in Docker for user ${D}USER"
+        echo "TABULA_STEP 1/5 Checking Docker"
+        if ! command -v docker >/dev/null 2>&1 || ! docker compose version >/dev/null 2>&1; then
+          sudo -n apt-get update -qq
+          sudo -n apt-get install -y -qq docker.io docker-compose-v2
+        fi
+        sudo -n systemctl enable --now docker
+        sudo -n usermod -aG docker "${D}USER"
+        echo "TABULA_STEP 2/5 Switching off the open Ollama service"
+        if systemctl cat ollama >/dev/null 2>&1; then sudo -n systemctl disable --now ollama; fi
+        echo "TABULA_STEP 3/5 Writing the gateway"
+        cd ~/.tabula/gateway
+        if command -v nvidia-smi >/dev/null 2>&1 && sudo -n docker info 2>/dev/null | grep -qi nvidia; then
+        cat > compose.yaml <<'COMPOSE'
+        @@COMPOSE_GPU@@
+        COMPOSE
+        else
+        cat > compose.yaml <<'COMPOSE'
+        @@COMPOSE_CPU@@
+        COMPOSE
+        fi
+        echo "TABULA_HOST=$D(ip route get 1.1.1.1 | awk '{for(i=1;i<=NF;i++) if(${D}i=="src") print ${D}(i+1)}')" > .env
+        echo "TABULA_STEP 4/5 Downloading Ollama and the gateway"
+        sudo -n docker compose pull -q
+        echo "TABULA_STEP 5/5 Starting"
+        sudo -n docker compose up -d
+        for i in $D(seq 1 60); do sudo -n docker compose exec -T gateway test -f /data/caddy/pki/authorities/local/root.crt && break; sleep 1; done
+        echo TABULA_OK
+    """.trimIndent()
+        .replace("@@COMPOSE_GPU@@", Gateway.compose(gpu = true).trimEnd())
+        .replace("@@COMPOSE_CPU@@", Gateway.compose(gpu = false).trimEnd())
+
     fun installModel(kind: ServerKind, model: HfModelId): String = when (kind) {
-        ServerKind.OLLAMA -> "ollama pull 'hf.co/${model.value}'"
+        ServerKind.OLLAMA -> "docker compose -f ~/.tabula/gateway/compose.yaml exec -T ollama ollama pull 'hf.co/${model.value}'"
         ServerKind.VLLM ->
             "~/.tabula/venv/bin/hf download '${model.value}' --include '*.safetensors' '*.json' 'tokenizer*' && ~/.tabula/serve.sh '${model.value}'"
     }
