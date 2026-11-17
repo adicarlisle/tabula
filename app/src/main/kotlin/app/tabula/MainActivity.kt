@@ -39,19 +39,21 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
-import androidx.core.content.edit
 import androidx.compose.ui.text.ExperimentalTextApi
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
@@ -59,69 +61,121 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontVariation
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.edit
+import app.tabula.core.Accent
 import app.tabula.core.AiPause
 import app.tabula.core.AiRouter
 import app.tabula.core.AppEntry
 import app.tabula.core.AppSearch
 import app.tabula.core.CapAction
+import app.tabula.core.Corners
+import app.tabula.core.LauncherStyle
 import app.tabula.core.LocalCommand
 import app.tabula.core.LocalCommandParser
 import app.tabula.core.ModelTier
+import app.tabula.core.Palette
 import app.tabula.core.SettingKind
+import app.tabula.core.Theme
+import app.tabula.core.WordFont
+import app.tabula.core.WordSize
 import kotlinx.coroutines.delay
 import java.text.DecimalFormat
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 
-private val Ink = Color(0xFF0A0A0A)
-private val Paper = Color(0xFFF2F2F2)
-private val Muted = Color(0xFFA3A3A3)
-private val Faint = Color(0xFF5A5A5A)
-private val Accent = Color(0xFFFF4A3D)
-
-private val Mono = FontFamily(
+internal val Mono = FontFamily(
     Font(R.font.space_mono_regular, FontWeight.Normal),
     Font(R.font.space_mono_bold, FontWeight.Bold),
 )
 
 @OptIn(ExperimentalTextApi::class)
-private val Grotesk = FontFamily(
+internal val Grotesk = FontFamily(
     Font(R.font.space_grotesk, FontWeight.SemiBold, variationSettings = FontVariation.Settings(FontVariation.weight(600))),
 )
+
+private val Serif = FontFamily(Font(R.font.instrument_serif, FontWeight.Normal))
+
+/** Everything on screen reads its colours, font and sizes from here, so Settings changes apply live. */
+internal data class Look(
+    val bg: Color, val text: Color, val muted: Color, val faint: Color, val accent: Color,
+    val words: FontFamily, val wordWeight: FontWeight, val wordSp: TextUnit, val radius: Dp,
+) {
+    companion object {
+        fun of(style: LauncherStyle): Look {
+            val p = Palette.of(style)
+            val (family, weight) = when (style.font) {
+                WordFont.MONO -> Mono to FontWeight.Bold
+                WordFont.GROTESK -> Grotesk to FontWeight.SemiBold
+                WordFont.SERIF -> Serif to FontWeight.Normal
+            }
+            return Look(
+                Color(p.background), Color(p.text), Color(p.muted), Color(p.faint), Color(p.accent),
+                family, weight, style.size.sp.sp, style.corners.searchBarRadiusDp.dp,
+            )
+        }
+    }
+}
+
+internal val LocalLook = staticCompositionLocalOf { Look.of(LauncherStyle.DEFAULT) }
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // Light status and navigation icons on Tabula's black background.
-        enableEdgeToEdge(
-            statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
-            navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
-        )
-        setContent { Launcher() }
+        setContent {
+            val context = LocalContext.current
+            val prefs = remember { context.getSharedPreferences("style", Context.MODE_PRIVATE) }
+            var style by remember { mutableStateOf(LauncherStyle.decode(prefs.all.mapValues { it.value as? String })) }
+            val look = Look.of(style)
+            LaunchedEffect(style.theme) {
+                val bar = if (style.theme == Theme.PAPER) {
+                    SystemBarStyle.light(android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT)
+                } else {
+                    SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
+                }
+                enableEdgeToEdge(statusBarStyle = bar, navigationBarStyle = bar)
+            }
+            CompositionLocalProvider(LocalLook provides look) {
+                Launcher(style) { new ->
+                    style = new
+                    prefs.edit { new.encode().forEach { (k, v) -> putString(k, v) } }
+                }
+            }
+        }
     }
 }
 
-private enum class Mode { HOME, DRAWER }
+internal enum class Mode { INTRO, HOME, DRAWER, SETTINGS, PRO }
 
 @Composable
-private fun Launcher() {
+private fun Launcher(style: LauncherStyle, onStyle: (LauncherStyle) -> Unit) {
     val context = LocalContext.current
+    val look = LocalLook.current
     val locale = LocalConfiguration.current.locales[0]
     val apps = remember { loadApps(context) }
     val pins = remember { Pins(context, apps) }
     var query by remember { mutableStateOf("") }
-    var mode by remember { mutableStateOf(Mode.HOME) }
+    val introPrefs = remember { context.getSharedPreferences("intro", Context.MODE_PRIVATE) }
+    var mode by remember { mutableStateOf(if (introPrefs.getBoolean("done", false)) Mode.HOME else Mode.INTRO) }
     var answer by remember { mutableStateOf<String?>(null) }
 
-    BackHandler(enabled = query.isNotEmpty() || mode != Mode.HOME || answer != null) {
-        query = ""; answer = null; mode = Mode.HOME
+    BackHandler(enabled = query.isNotEmpty() || (mode != Mode.HOME && mode != Mode.INTRO) || answer != null) {
+        query = ""; answer = null
+        mode = if (mode == Mode.PRO) Mode.SETTINGS else Mode.HOME
     }
 
     Column(
-        Modifier.fillMaxSize().background(Ink).systemBarsPadding().imePadding().padding(horizontal = 24.dp),
+        Modifier.fillMaxSize().background(look.bg).systemBarsPadding().imePadding().padding(horizontal = 24.dp),
     ) {
+        when (mode) {
+            Mode.INTRO -> { Intro { introPrefs.edit { putBoolean("done", true) }; mode = Mode.HOME }; return@Column }
+            Mode.SETTINGS -> { SettingsScreen(style, onStyle, onPro = { mode = Mode.PRO }, onIntro = { mode = Mode.INTRO }, onClose = { mode = Mode.HOME }); return@Column }
+            Mode.PRO -> { ProScreen(onClose = { mode = Mode.SETTINGS }); return@Column }
+            else -> Unit
+        }
         Spacer(Modifier.height(24.dp))
         Clock()
         Spacer(Modifier.height(28.dp))
@@ -131,15 +185,13 @@ private fun Launcher() {
             mode == Mode.DRAWER -> AppSearch.search(apps, "")
             else -> pins.entries
         }
-        val wordSize = if (mode == Mode.HOME && query.isBlank()) 34.sp else 22.sp
+        val home = mode == Mode.HOME && query.isBlank()
         LazyColumn(Modifier.weight(1f)) {
-            if (mode == Mode.HOME && query.isBlank() && list.isEmpty()) {
-                item { Label("OPEN ALL AND LONG-PRESS AN APP TO PIN IT") }
-            }
+            if (home && list.isEmpty()) item { Label("OPEN ALL AND LONG-PRESS AN APP TO PIN IT") }
             items(list, key = { it.id }) { app ->
                 AppWord(
                     label = app.label.uppercase(locale),
-                    size = wordSize,
+                    size = if (home) look.wordSp else 22.sp,
                     pinned = mode == Mode.DRAWER && pins.isPinned(app),
                     onOpen = { launch(context, app); query = ""; mode = Mode.HOME },
                     onLongPress = { pins.toggle(app) },
@@ -147,16 +199,13 @@ private fun Launcher() {
             }
         }
 
-        answer?.let { Label(it, color = Paper, modifier = Modifier.padding(vertical = 8.dp)) }
+        answer?.let { Label(it, Modifier.padding(vertical = 8.dp), color = look.text) }
 
-        Row(
-            Modifier.fillMaxWidth().padding(vertical = 8.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            Label(
-                if (mode == Mode.DRAWER) "← HOME" else "ALL",
-                modifier = Modifier.combinedClickable(onClick = { mode = if (mode == Mode.DRAWER) Mode.HOME else Mode.DRAWER; query = "" }).padding(vertical = 12.dp),
-            )
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            TapLabel(if (mode == Mode.DRAWER) "← HOME" else "ALL") {
+                mode = if (mode == Mode.DRAWER) Mode.HOME else Mode.DRAWER; query = ""
+            }
+            TapLabel("SETTINGS") { mode = Mode.SETTINGS; query = "" }
         }
 
         SearchBar(query, onChange = { query = it; answer = null }) {
@@ -168,7 +217,100 @@ private fun Launcher() {
 }
 
 @Composable
+private fun SettingsScreen(style: LauncherStyle, onStyle: (LauncherStyle) -> Unit, onPro: () -> Unit, onIntro: () -> Unit, onClose: () -> Unit) {
+    val look = LocalLook.current
+    val context = LocalContext.current
+    val prefs = remember { context.getSharedPreferences("pro", Context.MODE_PRIVATE) }
+    var proUnlocked by remember { mutableStateOf(prefs.getBoolean("unlocked", false)) }
+    var taps by remember { mutableIntStateOf(0) }
+
+    LazyColumn(Modifier.fillMaxSize()) {
+        item {
+            Spacer(Modifier.height(16.dp))
+            TapLabel("← HOME", onTap = onClose)
+            Title("SETTINGS")
+        }
+        item {
+            Section("ACCENT · ${style.accent.label.uppercase()}")
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Accent.entries.forEach { a ->
+                    val colour = Color(a.argb ?: Palette.of(style).text)
+                    Box(
+                        Modifier.size(44.dp)
+                            .border(2.dp, if (a == style.accent) look.text else Color.Transparent, CircleShape)
+                            .padding(6.dp).background(colour, CircleShape)
+                            .combinedClickable(onClickLabel = a.label, onClick = { onStyle(style.copy(accent = a)) }),
+                    )
+                }
+            }
+        }
+        item { Choice("THEME", Theme.entries, style.theme) { onStyle(style.copy(theme = it)) } }
+        item { Choice("WORD FONT", WordFont.entries, style.font) { onStyle(style.copy(font = it)) } }
+        item { Choice("WORD SIZE", WordSize.entries, style.size) { onStyle(style.copy(size = it)) } }
+        item { Choice("CORNERS", Corners.entries, style.corners) { onStyle(style.copy(corners = it)) } }
+        item {
+            Section("PREVIEW")
+            BasicText("MESSAGES", style = TextStyle(fontFamily = look.words, fontWeight = look.wordWeight, fontSize = look.wordSp, color = look.text))
+            Spacer(Modifier.height(16.dp))
+            TapLabel("RESET TO DEFAULT") { onStyle(LauncherStyle.DEFAULT) }
+        }
+        if (proUnlocked) item { Spacer(Modifier.height(8.dp)); TapLabel("PRO · LOCAL AI SERVER →", color = look.accent, onTap = onPro) }
+        item {
+            Spacer(Modifier.height(24.dp))
+            // Hidden: tap the version 7 times to show Pro, like Android's developer options.
+            TapLabel("SHOW THE INTRODUCTION AGAIN", onTap = onIntro)
+            TapLabel("TABULA ${BuildConfig.VERSION_NAME}", color = look.faint) {
+                taps++
+                if (taps >= 7 && !proUnlocked) { proUnlocked = true; prefs.edit { putBoolean("unlocked", true) } }
+            }
+            Label(
+                when {
+                    proUnlocked -> "PRO IS UNLOCKED"
+                    taps in 3..6 -> "${7 - taps} MORE TAPS TO UNLOCK PRO"
+                    else -> "TAP THE VERSION 7 TIMES TO UNLOCK PRO"
+                },
+                color = look.faint,
+            )
+            Spacer(Modifier.height(32.dp))
+        }
+    }
+}
+
+@Composable
+private fun <E : Enum<E>> Choice(title: String, options: List<E>, selected: E, onPick: (E) -> Unit) {
+    val look = LocalLook.current
+    Section(title)
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        options.forEach { o ->
+            val on = o == selected
+            Box(
+                Modifier.weight(1f).height(48.dp)
+                    .background(if (on) look.text else Color.Transparent, RoundedCornerShape(look.radius / 4))
+                    .border(1.dp, if (on) look.text else look.faint, RoundedCornerShape(look.radius / 4))
+                    .combinedClickable(onClick = { onPick(o) }),
+                contentAlignment = Alignment.Center,
+            ) {
+                BasicText(o.name, style = TextStyle(fontFamily = Mono, fontSize = 11.sp, letterSpacing = 1.sp, color = if (on) look.bg else look.muted))
+            }
+        }
+    }
+}
+
+@Composable
+internal fun Title(text: String) = BasicText(
+    text, Modifier.padding(vertical = 12.dp),
+    style = TextStyle(fontFamily = Grotesk, fontSize = 44.sp, color = LocalLook.current.text, letterSpacing = (-1).sp),
+)
+
+@Composable
+internal fun Section(text: String) {
+    Spacer(Modifier.height(20.dp))
+    Label(text, Modifier.padding(bottom = 10.dp))
+}
+
+@Composable
 private fun Clock() {
+    val look = LocalLook.current
     val locale = LocalConfiguration.current.locales[0]
     var now by remember { mutableStateOf(LocalDateTime.now()) }
     LaunchedEffect(Unit) {
@@ -179,45 +321,47 @@ private fun Clock() {
     }
     BasicText(
         now.format(DateTimeFormatter.ofPattern("HH:mm")),
-        style = TextStyle(fontFamily = Grotesk, fontSize = 96.sp, color = Paper, letterSpacing = (-4).sp),
+        style = TextStyle(fontFamily = Grotesk, fontSize = 96.sp, color = look.text, letterSpacing = (-4).sp),
     )
     Label(now.format(DateTimeFormatter.ofPattern("EEE d MMM", locale)).uppercase(locale))
 }
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun AppWord(label: String, size: androidx.compose.ui.unit.TextUnit, pinned: Boolean, onOpen: () -> Unit, onLongPress: () -> Unit) {
+private fun AppWord(label: String, size: TextUnit, pinned: Boolean, onOpen: () -> Unit, onLongPress: () -> Unit) {
+    val look = LocalLook.current
     Row(
         Modifier.fillMaxWidth().combinedClickable(onClick = onOpen, onLongClick = onLongPress).padding(vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        BasicText(label, style = TextStyle(fontFamily = Mono, fontWeight = FontWeight.Bold, fontSize = size, color = Paper, letterSpacing = 1.sp))
+        BasicText(label, style = TextStyle(fontFamily = look.words, fontWeight = look.wordWeight, fontSize = size, color = look.text, letterSpacing = 1.sp))
         if (pinned) {
             Spacer(Modifier.size(10.dp))
-            Box(Modifier.size(6.dp).background(Accent, CircleShape))
+            Box(Modifier.size(6.dp).background(look.accent, CircleShape))
         }
     }
 }
 
 @Composable
 private fun SearchBar(query: String, onChange: (String) -> Unit, onGo: () -> Unit) {
+    val look = LocalLook.current
     BasicTextField(
         value = query,
         onValueChange = onChange,
         singleLine = true,
-        textStyle = TextStyle(fontFamily = Mono, fontSize = 15.sp, color = Paper),
-        cursorBrush = SolidColor(Accent),
+        textStyle = TextStyle(fontFamily = Mono, fontSize = 15.sp, color = look.text),
+        cursorBrush = SolidColor(look.accent),
         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
         keyboardActions = KeyboardActions(onGo = { onGo() }),
         decorationBox = { inner ->
             Row(
-                Modifier.fillMaxWidth().height(56.dp).border(1.dp, Paper, RoundedCornerShape(28.dp)).padding(horizontal = 20.dp),
+                Modifier.fillMaxWidth().height(56.dp).border(1.dp, look.text, RoundedCornerShape(look.radius)).padding(horizontal = 20.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Box(Modifier.size(10.dp).background(Accent, CircleShape))
+                Box(Modifier.size(10.dp).background(look.accent, CircleShape))
                 Spacer(Modifier.size(12.dp))
                 Box {
-                    if (query.isEmpty()) BasicText("ask or search…", style = TextStyle(fontFamily = Mono, fontSize = 15.sp, color = Muted))
+                    if (query.isEmpty()) BasicText("ask or search…", style = TextStyle(fontFamily = Mono, fontSize = 15.sp, color = look.muted))
                     inner()
                 }
             }
@@ -226,8 +370,12 @@ private fun SearchBar(query: String, onChange: (String) -> Unit, onGo: () -> Uni
 }
 
 @Composable
-private fun Label(text: String, modifier: Modifier = Modifier, color: Color = Muted) =
+internal fun Label(text: String, modifier: Modifier = Modifier, color: Color = LocalLook.current.muted) =
     BasicText(text, modifier, style = TextStyle(fontFamily = Mono, fontSize = 12.sp, color = color, letterSpacing = 2.sp))
+
+@Composable
+internal fun TapLabel(text: String, color: Color = LocalLook.current.muted, onTap: () -> Unit) =
+    Label(text, Modifier.combinedClickable(onClick = onTap).padding(vertical = 14.dp), color = color)
 
 /** Pinned apps, in order, saved on the phone. First run pins the first five apps A to Z. */
 private class Pins(context: Context, private val apps: List<AppEntry>) {
