@@ -145,6 +145,18 @@ object ServerScripts {
 
     fun progress(): String = "tail -n 60 ~/.tabula/install.log 2>/dev/null"
 
+    private val modelName = Regex("""^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$""")
+
+    /** Deletes one model from the Ollama container. Only the owner's phone can do this (over SSH). */
+    fun removeModel(name: String): String {
+        require(modelName.matches(name) && ".." !in name) { "Not a model name: $name" }
+        return "docker compose -f ~/.tabula/gateway/compose.yaml exec -T ollama ollama rm '$name'"
+    }
+
+    /** Stops any model download in the container and removes its half-downloaded files. */
+    fun cancelDownloads(): String =
+        "docker compose -f ~/.tabula/gateway/compose.yaml exec -T ollama sh -c \"pkill -f 'ollama pull'; rm -f /root/.ollama/models/blobs/*-partial*\""
+
     /** Port the model server listens on, on the server's own localhost. */
     fun port(kind: ServerKind): Int = if (kind == ServerKind.OLLAMA) 11434 else 8000
 }

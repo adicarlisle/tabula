@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertThrows
 
 /** Examples: Ollama in Docker behind an HTTPS gateway that needs a per-device API key. */
 class GatewayTest {
@@ -85,5 +86,26 @@ class GatewayTest {
             "tabula://pair?h=192.168.1.65",
             "",
         ).forEach { assertNull(Pairing.decode(it), it) }
+    }
+
+    @Test
+    fun `devices with a key can use models but not download, delete or change them`() {
+        val caddy = Gateway.caddyfile(keys)
+        // One rule needs both a listed key and an allowed path; anything else falls through to 401.
+        assertTrue("\t@use {\n\t\theader Authorization " in caddy, caddy)
+        assertTrue("\t\tpath /api/generate /api/chat /api/tags /api/show /api/version /v1/chat/completions /v1/completions /v1/models\n\t}" in caddy, caddy)
+        assertTrue("\thandle @use {\n\t\treverse_proxy ollama:11434\n\t}\n\trespond 401" in caddy, caddy)
+        listOf("/api/pull", "/api/delete", "/api/create", "/api/push", "/api/copy").forEach { assertFalse(it in caddy, it) }
+    }
+
+    @Test
+    fun `the owner's phone manages models over ssh`() {
+        assertEquals(
+            "docker compose -f ~/.tabula/gateway/compose.yaml exec -T ollama ollama rm 'devstral:latest'",
+            ServerScripts.removeModel("devstral:latest"),
+        )
+        assertTrue("pkill -f 'ollama pull'" in ServerScripts.cancelDownloads())
+        assertTrue("-partial" in ServerScripts.cancelDownloads())
+        listOf("x'; rm -rf /", "a b", "", "\$(id)").forEach { assertThrows<IllegalArgumentException>(it) { ServerScripts.removeModel(it) } }
     }
 }

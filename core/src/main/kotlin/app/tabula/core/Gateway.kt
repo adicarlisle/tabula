@@ -34,6 +34,11 @@ data class DeviceKey(val name: String, val key: String) {
 object Gateway {
     const val PORT = 11435
 
+    private val USE_PATHS = listOf(
+        "/api/generate", "/api/chat", "/api/tags", "/api/show", "/api/version",
+        "/v1/chat/completions", "/v1/completions", "/v1/models",
+    )
+
     fun compose(gpu: Boolean): String = buildString {
         appendLine("services:")
         appendLine("  ollama:")
@@ -70,8 +75,13 @@ object Gateway {
         appendLine("\t\tfile_server")
         appendLine("\t}")
         if (keys.isNotEmpty()) {
-            appendLine("\t@key header Authorization " + keys.joinToString(" ") { "\"Bearer ${it.key}\"" })
-            appendLine("\thandle @key {")
+            // Needs a listed key AND an allowed path. Devices can use models, not download, delete or change them;
+            // that stays with the owner's phone over SSH. Anything else falls through to 401.
+            appendLine("\t@use {")
+            appendLine("\t\theader Authorization " + keys.joinToString(" ") { "\"Bearer ${it.key}\"" })
+            appendLine("\t\tpath " + USE_PATHS.joinToString(" "))
+            appendLine("\t}")
+            appendLine("\thandle @use {")
             appendLine("\t\treverse_proxy ollama:11434")
             appendLine("\t}")
         }

@@ -154,6 +154,9 @@ internal fun ProScreen(onClose: () -> Unit) {
     val devices = remember { mutableStateListOf<DeviceKey>().apply { addAll(DeviceKey.decodeAll(secrets.get("gw-devices")?.decodeToString() ?: "")) } }
     var newDevice by remember { mutableStateOf("") }
     var qr by remember { mutableStateOf<Pair<String, String>?>(null) }
+    var confirmDelete by remember { mutableStateOf<String?>(null) }
+    var downloading by remember { mutableStateOf(false) }
+    var cancelled by remember { mutableStateOf(false) }
 
     fun work(block: suspend () -> Unit) {
         if (busy) return
@@ -485,11 +488,28 @@ internal fun ProScreen(onClose: () -> Unit) {
                         if (models.isEmpty()) Note("No models yet. Find one below.")
                         models.forEach { m ->
                             val on = m == model
-                            Row(
-                                Modifier.fillMaxWidth().combinedClickable(onClick = { model = m; prefs.edit { putString("model", m) } }).padding(vertical = 10.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                BasicText((if (on) "● " else "") + m, style = TextStyle(fontFamily = Mono, fontSize = 13.sp, color = if (on) look.accent else look.text))
+                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                BasicText(
+                                    (if (on) "● " else "") + m,
+                                    Modifier.weight(1f).combinedClickable(onClick = { model = m; prefs.edit { putString("model", m) } }).padding(vertical = 10.dp),
+                                    style = TextStyle(fontFamily = Mono, fontSize = 13.sp, color = if (on) look.accent else look.text),
+                                )
+                                // Only the phone that set the server up can delete models (over SSH); shared devices can't.
+                                if (step == Step.MODELS) {
+                                    val asking = confirmDelete == m
+                                    TapLabel(if (asking) "TAP TO CONFIRM" else "DELETE", color = if (asking) look.accent else look.muted) {
+                                        if (!asking) confirmDelete = m else withLan {
+                                            work {
+                                                confirmDelete = null
+                                                val code = withKeySession { s -> Ssh(known, lan(context)).run(s, ServerScripts.removeModel(m)) }
+                                                if (code != 0) throw IllegalStateException("Couldn't delete $m (exit $code)")
+                                                if (model == m) { model = null; prefs.edit { remove("model") } }
+                                                refreshModels()
+                                                message = "Deleted $m."
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                         model?.let { m ->
@@ -556,7 +576,7 @@ internal fun ProScreen(onClose: () -> Unit) {
                                 Button(if (busy) "INSTALLING…" else "INSTALL ON SERVER", enabled = !busy) {
                                     withLan {
                                         work {
-                                            log.clear()
+                                            log.clear(); downloading = true; cancelled = false
                                             val cmd = ServerScripts.installModel(kind, id)
                                             val token = hfToken.trim()
                                             val code = withKeySession { s ->
@@ -564,7 +584,10 @@ internal fun ProScreen(onClose: () -> Unit) {
                                                 if (token.isNotEmpty()) Ssh(known, lan(context)).run(s, "read -r HF_TOKEN; export HF_TOKEN; $cmd", (token + "\n").toByteArray()) { scope.launch { log.add(it) } }
                                                 else Ssh(known, lan(context)).run(s, cmd) { scope.launch { log.add(it) } }
                                             }
-                                            if (code == 0) {
+                                            downloading = false
+                                            if (cancelled) {
+                                                message = "Download cancelled. The half-downloaded files were removed."
+                                            } else if (code == 0) {
                                                 model = if (kind == ServerKind.OLLAMA) "hf.co/${id.value}" else id.value
                                                 prefs.edit { putString("model", model) }
                                                 runCatching { refreshModels() }
@@ -583,6 +606,14 @@ internal fun ProScreen(onClose: () -> Unit) {
                                 Button("OPEN MODEL CARD") { context.startActivity(Intent(Intent.ACTION_VIEW, decision.url.toUri()).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
                             }
                             is HfDecision.Blocked -> Note(decision.reason)
+                        }
+                        if (downloading && kind == ServerKind.OLLAMA) {
+                            Spacer(Modifier.height(8.dp))
+                            TapLabel("CANCEL DOWNLOAD", color = look.accent) {
+                                // Runs on its own connection, alongside the download it stops.
+                                cancelled = true
+                                scope.launch { runCatching { withKeySession { s -> Ssh(known, lan(context)).run(s, ServerScripts.cancelDownloads()) } } }
+                            }
                         }
                         if (log.isNotEmpty()) Code(log.takeLast(12).joinToString("\n"))
                     }
