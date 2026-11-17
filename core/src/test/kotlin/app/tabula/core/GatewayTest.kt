@@ -30,6 +30,8 @@ class GatewayTest {
     fun `gateway serves https, lets only listed keys through and refuses the rest`() {
         val caddy = Gateway.caddyfile(keys)
         assertTrue("tls internal" in caddy)
+        // Devices connect by IP address, which sends no SNI; without this the TLS handshake fails.
+        assertTrue(caddy.startsWith("{\n\tdefault_sni {${'$'}TABULA_HOST}\n}\n"), caddy)
         assertTrue("\"Bearer tk_${"a".repeat(43)}\"" in caddy)
         assertTrue("\"Bearer tk_${"b".repeat(43)}\"" in caddy)
         assertTrue("reverse_proxy ollama:11434" in caddy)

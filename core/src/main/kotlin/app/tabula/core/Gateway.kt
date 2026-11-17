@@ -57,6 +57,10 @@ object Gateway {
     }
 
     fun caddyfile(keys: List<DeviceKey>): String = buildString {
+        // Devices connect by IP address and send no SNI, so tell Caddy which certificate to use.
+        appendLine("{")
+        appendLine("\tdefault_sni {\$TABULA_HOST}")
+        appendLine("}")
         appendLine("https://{\$TABULA_HOST}:$PORT {")
         appendLine("\ttls internal")
         appendLine("\t# The gateway's own certificate authority, so devices can check they reached this server.")
