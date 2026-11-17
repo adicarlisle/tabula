@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Runs before every commit. The repo is public: block anything that looks like a secret,
+# and never commit with failing tests.
+set -euo pipefail
+
+# Use a JDK installed in the home folder if none is configured.
+if [ -z "${JAVA_HOME:-}" ] && ! command -v java >/dev/null 2>&1 && [ -x "$HOME/.local/opt/jdk21/bin/java" ]; then
+  export JAVA_HOME="$HOME/.local/opt/jdk21"
+fi
+
+added=$(git diff --cached --no-color -U0 | grep -E '^\+[^+]' || true)
+patterns='sk-ant-[A-Za-z0-9_-]{10,}|sk-(proj|or-v1)-[A-Za-z0-9_-]{10,}|\bsk-[A-Za-z0-9]{32,}|AIza[0-9A-Za-z_-]{35}|gh[pousr]_[A-Za-z0-9]{30,}|xox[abpr]-[A-Za-z0-9-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|storePassword *= *[^ ]'
+if echo "$added" | grep -Eq "$patterns"; then
+  echo "pre-commit: blocked, staged changes contain something that looks like a secret:" >&2
+  echo "$added" | grep -En "$patterns" | sed -E 's/(.{12}).*/\1…/' >&2
+  exit 1
+fi
+if git diff --cached --name-only | grep -Eq '\.(jks|keystore)$|(^|/)(local\.properties|keystore\.properties|\.env)$'; then
+  echo "pre-commit: blocked, keystores and local config files must never be committed." >&2
+  exit 1
+fi
+if command -v gitleaks >/dev/null 2>&1; then
+  gitleaks git --staged --no-banner --redact
+fi
+if git diff --cached --name-only | grep -Eq '\.(kt|kts|toml|xml)$'; then
+  ./gradlew :core:test -q --console=plain
+fi

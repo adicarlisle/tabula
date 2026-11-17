@@ -1,0 +1,19 @@
+# build
+.gradle/
+build/
+.kotlin/
+*.apk
+*.aab
+# local machine / IDE
+local.properties
+.idea/
+*.iml
+.DS_Store
+# secrets: never commit
+*.jks
+*.keystore
+keystore.properties
+.env
+*.env
+secrets.*
+google-services.json

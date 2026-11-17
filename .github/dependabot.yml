@@ -1,0 +1,28 @@
+# Strict dependency updates. Every update is its own PR (no grouping) so each one is
+# reviewed and must pass CI, including the checksum verification in
+# gradle/verification-metadata.xml. A short cooldown avoids pulling in a release in its
+# first days, when hijacked or broken versions are usually caught and pulled.
+version: 2
+updates:
+  - package-ecosystem: "gradle"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    cooldown:
+      default-days: 3
+      semver-major-days: 7
+    open-pull-requests-limit: 20
+    labels: ["dependencies"]
+    commit-message:
+      prefix: "chore(deps)"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    cooldown:
+      default-days: 3
+    open-pull-requests-limit: 10
+    labels: ["dependencies", "ci"]
+    commit-message:
+      prefix: "chore(ci)"
