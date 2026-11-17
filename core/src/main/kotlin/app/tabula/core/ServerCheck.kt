@@ -66,6 +66,13 @@ data class SetupProgress(val step: Int, val total: Int, val label: String) {
     companion object {
         private val line = Regex("""^TABULA_STEP (\d+)/(\d+) (.+)$""")
 
+        private val info = Regex("""^TABULA_INFO (.+)$""")
+
+        /** The latest progress note for the current stage, e.g. "1.2 GB downloaded". */
+        fun detail(log: String): String? =
+            log.lines().map { it.trim() }.takeLastWhile { !line.matches(it) }
+                .mapNotNull { info.matchEntire(it)?.groupValues?.get(1) }.lastOrNull()
+
         fun of(log: String): SetupProgress =
             log.lines().mapNotNull { line.matchEntire(it.trim()) }.lastOrNull()
                 ?.destructured?.let { (n, total, label) -> SetupProgress(n.toInt(), total.toInt(), label) }

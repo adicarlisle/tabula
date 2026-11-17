@@ -99,7 +99,13 @@ object ServerScripts {
         fi
         echo "TABULA_HOST=$D(ip route get 1.1.1.1 | awk '{for(i=1;i<=NF;i++) if(${D}i=="src") print ${D}(i+1)}')" > .env
         echo "TABULA_STEP 4/5 Downloading Ollama and the gateway"
+        # Report how much has downloaded every few seconds (from the network counter; needs no sudo).
+        NETIF=${D}(ip route get 1.1.1.1 | awk '{for(i=1;i<=NF;i++) if(${D}i=="dev") print ${D}(i+1)}')
+        rx() { grep "${D}NETIF:" /proc/net/dev | sed 's/.*://' | awk '{print ${D}1}'; }
+        RX0=${D}(rx)
+        ( while sleep 5; do awk -v b=${D}(( ${D}(rx) - RX0 )) 'BEGIN { if (b > 1073741824) printf "TABULA_INFO %.1f GB downloaded\n", b / 1073741824; else printf "TABULA_INFO %d MB downloaded\n", b / 1048576 }'; done ) & WATCH=${D}!
         sudo -n docker compose pull -q
+        kill ${D}WATCH 2>/dev/null || true
         echo "TABULA_STEP 5/5 Starting"
         sudo -n docker compose up -d
         for i in $D(seq 1 60); do sudo -n docker compose exec -T gateway test -f /data/caddy/pki/authorities/local/root.crt && break; sleep 1; done

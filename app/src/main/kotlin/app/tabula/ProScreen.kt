@@ -456,9 +456,9 @@ internal fun ProScreen(onClose: () -> Unit) {
             }
 
             Step.RUNNING -> item {
-                SetupProgressView(SetupProgress.of(log.joinToString("\n")), prefs.getLong("install_started", System.currentTimeMillis()), failed = message != null)
+                SetupProgressView(SetupProgress.of(log.joinToString("\n")), SetupProgress.detail(log.joinToString("\n")), prefs.getLong("install_started", System.currentTimeMillis()), failed = message != null)
                 TapLabel(if (showDetails) "HIDE DETAILS" else "SHOW DETAILS") { showDetails = !showDetails }
-                if (showDetails) Code(log.filterNot { it.startsWith("TABULA_") }.joinToString("\n").ifEmpty { "…" })
+                if (showDetails) Code(log.filterNot { it.startsWith("TABULA_STEP") || it.startsWith("TABULA_INFO") }.joinToString("\n").ifEmpty { "…" })
                 if (!busy) TapLabel("BACK TO SERVER SETUP") { step = Step.SERVER }
             }
 
@@ -614,7 +614,7 @@ internal fun ProScreen(onClose: () -> Unit) {
 
 /** The setup loading screen: the current stage in words, a progress bar, elapsed time and a gentle pulse. */
 @Composable
-private fun SetupProgressView(progress: SetupProgress, startedAt: Long, failed: Boolean) {
+private fun SetupProgressView(progress: SetupProgress, detail: String?, startedAt: Long, failed: Boolean) {
     val look = LocalLook.current
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) { while (true) { now = System.currentTimeMillis(); delay(1_000) } }
@@ -640,6 +640,7 @@ private fun SetupProgressView(progress: SetupProgress, startedAt: Long, failed: 
         Modifier.padding(vertical = 16.dp),
         style = TextStyle(fontFamily = Grotesk, fontSize = 30.sp, lineHeight = 34.sp, color = look.text, letterSpacing = (-0.5).sp),
     )
+    detail?.let { Label(it.uppercase(), Modifier.padding(bottom = 12.dp), color = look.text) }
     Box(Modifier.fillMaxWidth().height(6.dp).background(look.faint.copy(alpha = 0.35f), RoundedCornerShape(3.dp))) {
         Box(Modifier.fillMaxWidth(fraction).fillMaxHeight().background(look.accent, RoundedCornerShape(3.dp)))
     }

@@ -1,6 +1,7 @@
 package app.tabula.core
 
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 /** Examples: before changing anything, say what is already on the server. */
@@ -55,5 +56,19 @@ class ServerCheckTest {
             SetupProgress(4, 5, "Downloading Ollama and the gateway"),
             SetupProgress.of("TABULA_STEP 1/5 Checking Docker\nfoo\nTABULA_STEP 4/5 Downloading Ollama and the gateway\nbar"),
         )
+    }
+
+    @Test
+    fun `download progress shows under the stage`() {
+        assertEquals(null, SetupProgress.detail("TABULA_STEP 4/5 Downloading"))
+        assertEquals("1.2 GB downloaded", SetupProgress.detail("TABULA_STEP 4/5 Downloading\nTABULA_INFO 1.2 GB downloaded\nlayer done"))
+        assertEquals(null, SetupProgress.detail("TABULA_INFO 1 MB downloaded\nTABULA_STEP 5/5 Starting"))
+    }
+
+    @Test
+    fun `setup prints download progress while pulling images`() {
+        val script = ServerScripts.install(ServerKind.OLLAMA)
+        assertTrue("TABULA_INFO" in script)
+        assertTrue("/proc/net/dev" in script)
     }
 }
