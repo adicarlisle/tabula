@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A blocky "T" with the accent dot, inside the 66dp safe zone of a 108dp adaptive icon. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <path android:fillColor="#F2F2F2" android:pathData="M36,36h36v9H58.5v27h-9V45H36z" />
+    <path android:fillColor="#FF4A3D" android:pathData="M66,67.5a4.5,4.5 0,1 0,9 0a4.5,4.5 0,1 0,-9 0z" />
+</vector>

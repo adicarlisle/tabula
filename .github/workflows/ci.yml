@@ -26,8 +26,8 @@ jobs:
           java-version: "21"
       # Also validates the Gradle wrapper JAR against Gradle's published checksums.
       - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
-      - name: Tests (dependency checksums are verified on every resolve)
-        run: ./gradlew :core:test --no-daemon
+      - name: Tests, Android Lint and release build (dependency checksums verified on every resolve)
+        run: ./gradlew :core:test :app:lintRelease :app:assembleRelease --no-daemon
 
   secret-scan:
     runs-on: ubuntu-latest
