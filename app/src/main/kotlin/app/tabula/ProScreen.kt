@@ -77,6 +77,7 @@ import app.tabula.core.ServerCheck
 import app.tabula.core.ServerKind
 import app.tabula.core.ServerScripts
 import app.tabula.core.SetupProgress
+import app.tabula.core.SetupFailure
 import app.tabula.core.SetupState
 import app.tabula.core.TargetPolicy
 import com.google.mlkit.vision.barcode.common.Barcode
@@ -140,6 +141,8 @@ internal fun ProScreen(onClose: () -> Unit) {
     var message by remember { mutableStateOf<String?>(null) }
     val log = remember { mutableStateListOf<String>() }
     var showDetails by remember { mutableStateOf(false) }
+    var failure by remember { mutableStateOf<SetupFailure?>(null) }
+    var lostConnection by remember { mutableStateOf(false) }
     var session by remember { mutableStateOf<Session?>(null) }
 
     var hfToken by remember { mutableStateOf(secrets.get("hf-token")?.decodeToString() ?: "") }
@@ -274,6 +277,7 @@ internal fun ProScreen(onClose: () -> Unit) {
                     if (ks?.isConnected != true) ks = keySession()
                     withContext(Dispatchers.IO) { StringBuilder().also { Ssh.readText(ks!!, ServerScripts.progress(), it) }.toString() }
                 } catch (_: Exception) { ks = null; null }
+                lostConnection = text == null
                 if (text != null) {
                     log.clear(); log.addAll(text.lines().filter { it.isNotBlank() })
                     when (SetupState.of(text)) {
@@ -284,7 +288,7 @@ internal fun ProScreen(onClose: () -> Unit) {
                             step = Step.MODELS
                             return
                         }
-                        SetupState.FAILED -> { prefs.edit { putBoolean("installing", false) }; message = "Setup stopped with an error. Open the details to see why."; return }
+                        SetupState.FAILED -> { prefs.edit { putBoolean("installing", false) }; failure = SetupFailure.explain(text); return }
                         SetupState.RUNNING -> Unit
                     }
                 }
@@ -456,10 +460,20 @@ internal fun ProScreen(onClose: () -> Unit) {
             }
 
             Step.RUNNING -> item {
-                SetupProgressView(SetupProgress.of(log.joinToString("\n")), SetupProgress.detail(log.joinToString("\n")), prefs.getLong("install_started", System.currentTimeMillis()), failed = message != null)
+                failure?.let { f ->
+                    Spacer(Modifier.height(32.dp))
+                    Label("SETUP STOPPED", color = look.accent)
+                    BasicText(f.title, Modifier.padding(vertical = 12.dp), style = TextStyle(fontFamily = Grotesk, fontSize = 28.sp, lineHeight = 32.sp, color = look.text))
+                    BasicText(f.advice, style = TextStyle(fontFamily = Mono, fontSize = 14.sp, lineHeight = 21.sp, color = look.text))
+                    if (log.any { "Putting your old Ollama back" in it }) Note("Your old Ollama has been switched back on, so nothing is lost.")
+                    Spacer(Modifier.height(20.dp))
+                    Button("TRY AGAIN") { failure = null; log.clear(); message = null; step = Step.SERVER }
+                }
+                if (failure == null) SetupProgressView(SetupProgress.of(log.joinToString("\n")), SetupProgress.detail(log.joinToString("\n")), prefs.getLong("install_started", System.currentTimeMillis()), failed = message != null)
                 TapLabel(if (showDetails) "HIDE DETAILS" else "SHOW DETAILS") { showDetails = !showDetails }
                 if (showDetails) Code(log.filterNot { it.startsWith("TABULA_STEP") || it.startsWith("TABULA_INFO") }.joinToString("\n").ifEmpty { "…" })
-                if (!busy) TapLabel("BACK TO SERVER SETUP") { step = Step.SERVER }
+                if (lostConnection && failure == null) Label("LOST CONNECTION TO THE SERVER · RETRYING", color = look.accent)
+                if (!busy && failure == null) TapLabel("BACK TO SERVER SETUP") { step = Step.SERVER }
             }
 
             Step.MODELS, Step.JOINED -> {

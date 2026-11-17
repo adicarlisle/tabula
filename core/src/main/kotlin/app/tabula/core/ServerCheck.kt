@@ -79,3 +79,30 @@ data class SetupProgress(val step: Int, val total: Int, val label: String) {
                 ?: SetupProgress(0, 5, "Starting")
     }
 }
+
+/** A failed setup, explained for the person holding the phone. */
+data class SetupFailure(val title: String, val advice: String) {
+    companion object {
+        private val known = listOf(
+            listOf("could not identify password", "Authentication required but not attempted", "incorrect password", "Sorry, try again") to
+                SetupFailure("The password didn't work for sudo", "Run setup again and check the password for this user on the server."),
+            listOf("is not in the sudoers", "not allowed to execute") to
+                SetupFailure("This user can't use sudo", "Use an account with admin rights on the server, or add this user to the sudo group."),
+            listOf("Could not get lock", "dpkg was interrupted", "Unable to acquire the dpkg") to
+                SetupFailure("Another install is running on the server", "Wait for it to finish (or restart the server), then try again."),
+            listOf("no space left on device") to
+                SetupFailure("The server is out of disk space", "Free up at least 10 GB on the server, then try again."),
+            listOf("port is already allocated", "address already in use") to
+                SetupFailure("Port 11435 is already in use on the server", "Stop whatever is using port 11435, then try again."),
+            listOf("Could not resolve host", "Temporary failure in name resolution", "TLS handshake timeout", "i/o timeout", "Network is unreachable", "connection refused") to
+                SetupFailure("The server couldn't reach the internet", "Check the server's internet connection, then try again."),
+        )
+
+        fun explain(log: String): SetupFailure {
+            known.firstOrNull { (patterns, _) -> patterns.any { log.contains(it, ignoreCase = true) } }?.let { return it.second }
+            val p = SetupProgress.of(log)
+            val where = if (p.step > 0) "Setup stopped at step ${p.step} of ${p.total}: ${p.label}" else "Setup stopped before it started"
+            return SetupFailure(where, "Open the details to see why, then try again. Nothing else was changed.")
+        }
+    }
+}

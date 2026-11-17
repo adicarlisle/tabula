@@ -74,10 +74,22 @@ object ServerScripts {
         sudo -S -p '' -v
         # Keep sudo's permission fresh during long downloads.
         ( while true; do sudo -n -v 2>/dev/null; sleep 60; done ) & KEEP=$D!
-        trap 'kill ${D}KEEP 2>/dev/null || true' EXIT
+        # If anything fails: stop the half-made gateway and switch the old Ollama back on.
+        OLD_OLLAMA=0
+        cleanup() {
+          rc=${D}?
+          kill ${D}KEEP 2>/dev/null || true
+          if [ "${D}rc" -ne 0 ]; then
+            if [ -f ~/.tabula/gateway/compose.yaml ]; then (cd ~/.tabula/gateway && sudo -n docker compose down >/dev/null 2>&1) || true; fi
+            if [ "${D}OLD_OLLAMA" = 1 ]; then echo "TABULA_INFO Putting your old Ollama back"; sudo -n systemctl enable --now ollama || true; fi
+          fi
+        }
+        trap cleanup EXIT
         sudo -n sh -c 'printf "Managed by the Tabula app: %s set up by user %s on %s\n" "${D}1" "${D}2" "${D}(date -Is)" >> /etc/tabula-managed' _ "Ollama in Docker" "${D}USER"
         logger -t tabula "Tabula phone app set up Ollama in Docker for user ${D}USER"
         echo "TABULA_STEP 1/5 Checking Docker"
+        AVAIL=${D}(df -BG --output=avail /var/lib 2>/dev/null | tail -1 | tr -dc 0-9)
+        if [ "${D}{AVAIL:-0}" -lt 10 ]; then echo "no space left on device: ${D}{AVAIL}G free, at least 10G needed"; exit 1; fi
         if ! command -v docker >/dev/null 2>&1 || ! docker compose version >/dev/null 2>&1; then
           sudo -n apt-get update -qq
           sudo -n apt-get install -y -qq docker.io docker-compose-v2
@@ -85,7 +97,7 @@ object ServerScripts {
         sudo -n systemctl enable --now docker
         sudo -n usermod -aG docker "${D}USER"
         echo "TABULA_STEP 2/5 Switching off the open Ollama service"
-        if systemctl cat ollama >/dev/null 2>&1; then sudo -n systemctl disable --now ollama; fi
+        if systemctl cat ollama >/dev/null 2>&1; then sudo -n systemctl disable --now ollama; OLD_OLLAMA=1; fi
         echo "TABULA_STEP 3/5 Writing the gateway"
         cd ~/.tabula/gateway
         if command -v nvidia-smi >/dev/null 2>&1 && sudo -n docker info 2>/dev/null | grep -qi nvidia; then
@@ -108,7 +120,9 @@ object ServerScripts {
         kill ${D}WATCH 2>/dev/null || true
         echo "TABULA_STEP 5/5 Starting"
         sudo -n docker compose up -d
-        for i in $D(seq 1 60); do sudo -n docker compose exec -T gateway test -f /data/caddy/pki/authorities/local/root.crt && break; sleep 1; done
+        for i in ${D}(seq 1 60); do sudo -n docker compose exec -T gateway test -f /data/caddy/pki/authorities/local/root.crt 2>/dev/null && break; sleep 1; done
+        sudo -n docker compose exec -T gateway test -f /data/caddy/pki/authorities/local/root.crt || { echo "The gateway didn't start in time"; exit 1; }
+        OLD_OLLAMA=0
         echo TABULA_OK
     """.trimIndent()
         .replace("@@COMPOSE_GPU@@", Gateway.compose(gpu = true).trimEnd())
